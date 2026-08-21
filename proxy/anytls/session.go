@@ -16,6 +16,7 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	sessionctx "github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/singbridge"
@@ -78,6 +79,24 @@ func (s *session) dispatchContext(ctx context.Context, st *stream) context.Conte
 	return dispatchCtx
 }
 
+func (s *session) accessContext(ctx context.Context, st *stream, dest net.Destination) context.Context {
+	dispatchCtx := s.dispatchContext(ctx, st)
+	msg := &log.AccessMessage{
+		To:     dest,
+		Status: log.AccessAccepted,
+		Reason: "",
+	}
+	if inbound := sessionctx.InboundFromContext(dispatchCtx); inbound != nil {
+		if inbound.Source.IsValid() {
+			msg.From = inbound.Source
+		}
+		if inbound.User != nil {
+			msg.Email = inbound.User.Email
+		}
+	}
+	return log.ContextWithAccessMessage(dispatchCtx, msg)
+}
+
 func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.MultiBuffer) error {
 	var first *buf.Buffer
 	body, first = buf.SplitFirst(body)
@@ -121,7 +140,7 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
 		return nil
 	}
 
-	l, err := s.dispatcher.Dispatch(dispatchCtx, dest)
+	l, err := s.dispatcher.Dispatch(s.accessContext(ctx, st, dest), dest)
 	if err != nil {
 		errors.LogWarning(ctx, "anytls: new stream dispatcher error, streamId=", st.sid, " err=", err)
 		return nil
@@ -169,7 +188,7 @@ func (s *session) handleFirstUDPFrame(ctx context.Context, st *stream, body buf.
 			s.finishStream(st.sid, nil)
 			return nil
 		}
-		link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
+		link, err := s.dispatcher.Dispatch(s.accessContext(ctx, st, requestDest), requestDest)
 		if err != nil {
 			errors.LogWarning(ctx, "anytls: UDP dispatcher error, streamId=", st.sid, " err=", err)
 			_ = s.sendFrame(newFrame(cmdFIN, st.sid))
@@ -291,7 +310,7 @@ func (s *session) handleUDPFrame(ctx context.Context, st *stream, body buf.Multi
 
 		if st.udpTarget == nil || st.udpTarget.String() != requestDest.String() {
 			oldLink := st.link
-			link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
+			link, err := s.dispatcher.Dispatch(s.accessContext(ctx, st, requestDest), requestDest)
 			if err != nil {
 				errors.LogWarning(ctx, "anytls: UDP dispatcher error, streamId=", st.sid, " err=", err)
 				_ = s.sendFrame(newFrame(cmdFIN, st.sid))
