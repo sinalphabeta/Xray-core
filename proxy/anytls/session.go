@@ -221,6 +221,7 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
 }
 
 func (s *session) handleUDPFrame(ctx context.Context, st *stream, body buf.MultiBuffer) error {
+	st.udpLastActive.Store(time.Now().UnixNano())
 	st.uotInput = appendMultiBuffer(st.uotInput, body)
 	if st.uotRequest == nil {
 		reader := bytes.NewReader(st.uotInput)
@@ -251,6 +252,7 @@ func (s *session) handleUDPFrame(ctx context.Context, st *stream, body buf.Multi
 			return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP dispatcher error").Base(err))
 		}
 		st.link = link
+		s.armUDPIdle(st)
 		go s.pumpUoTDownlink(st.sid, st, link, request.IsConnect, request.Destination)
 	}
 
@@ -354,8 +356,33 @@ func (s *session) pumpDownlink(sid uint32, link *transport.Link) {
 	}
 }
 
+// anytlsUDPIdleTimeout reaps UoT streams with no traffic in either direction.
+// Many clients never FIN idle UDP associations (DNS, abandoned QUIC, TUN short
+// flows), so this bounds their lifetime independently of the outbound.
+const anytlsUDPIdleTimeout = 120 * time.Second
+
+func (s *session) armUDPIdle(st *stream) {
+	st.udpIdleTimer = time.AfterFunc(anytlsUDPIdleTimeout, func() {
+		s.streamsMu.Lock()
+		alive := s.streams[st.sid] == st
+		s.streamsMu.Unlock()
+		if !alive {
+			return
+		}
+		idle := time.Duration(time.Now().UnixNano() - st.udpLastActive.Load())
+		if idle >= anytlsUDPIdleTimeout {
+			s.finishStream(st.sid, nil)
+			return
+		}
+		st.udpIdleTimer.Reset(anytlsUDPIdleTimeout - idle)
+	})
+}
+
 func (s *session) pumpUoTDownlink(sid uint32, st *stream, link *transport.Link, isConnect bool, dest M.Socksaddr) {
 	defer func() {
+		if st.udpIdleTimer != nil {
+			st.udpIdleTimer.Stop()
+		}
 		s.streamsMu.Lock()
 		current := s.streams[sid]
 		active := current == st && st.link == link
@@ -378,6 +405,7 @@ func (s *session) pumpUoTDownlink(sid uint32, st *stream, link *transport.Link, 
 		if err != nil {
 			break
 		}
+		st.udpLastActive.Store(time.Now().UnixNano())
 		for {
 			var b *buf.Buffer
 			mb, b = buf.SplitFirst(mb)

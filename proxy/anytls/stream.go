@@ -3,6 +3,8 @@ package anytls
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/sagernet/sing/common/uot"
 	"github.com/xtls/xray-core/common"
@@ -24,6 +26,10 @@ type stream struct {
 	udpIsConnect bool
 	uotRequest   *uot.Request
 	uotInput     []byte
+	// udpLastActive holds the unix-nano time of the latest UDP traffic in
+	// either direction; udpIdleTimer reaps the stream after a silent window.
+	udpLastActive atomic.Int64
+	udpIdleTimer  *time.Timer
 }
 
 func newStream(sid uint32, link *transport.Link) *stream {
