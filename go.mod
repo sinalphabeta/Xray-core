@@ -72,4 +72,4 @@ tool (
 	google.golang.org/protobuf/cmd/protoc-gen-go
 )
 
-replace github.com/xtls/reality v0.0.0-20260908062103-8cdf7bf9c7f0 => github.com/sinalphabeta/REALITY v0.0.0-20261030170207-a3f903edfbbf
+replace github.com/xtls/reality => github.com/wyx2685/REALITY v0.0.0-20261102081311-25ea3c0fa255
